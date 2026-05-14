@@ -1,3 +1,4 @@
+from ast import literal_eval
 import io
 import json
 import math
@@ -5,6 +6,7 @@ import os
 import re
 import time
 from datetime import datetime, time as dt_time
+from hmac import compare_digest
 from pathlib import Path
 from textwrap import dedent
 
@@ -30,6 +32,9 @@ LOGISTICS_ROUTES_URL = "https://logistics.wialon.com/api/routes"
 FARMERS_CHOICE_WEBSITE_URL = "https://farmerschoice.co.ke/"
 FARMERS_CHOICE_LOGO_URL = "https://farmerschoice.co.ke/wp-content/uploads/2025/05/farmers-choice-logo.png"
 LOCAL_BRAND_LOGO_FILE = "farmers_choice_logo.png"
+LOCAL_LOGIN_IMAGE_FILE = "farmers_choice_login_hero.jpg"
+AUTH_SESSION_KEY = "logistics_app_authenticated"
+AUTH_USER_KEY = "logistics_app_username"
 
 
 os.environ["TZ"] = "Africa/Nairobi"
@@ -69,6 +74,183 @@ def get_brand_logo_path():
     if local_logo_path.exists():
         return str(local_logo_path)
     return ""
+
+
+def get_login_image_path():
+    for candidate in (LOCAL_LOGIN_IMAGE_FILE, "download.jfif"):
+        login_image_path = Path(__file__).with_name(candidate)
+        if login_image_path.exists():
+            return str(login_image_path)
+    return ""
+
+
+def get_secrets_file_candidates():
+    return [
+        Path.home() / ".streamlit" / "secrets.toml",
+        Path(__file__).parent / ".streamlit" / "secrets.toml",
+        Path.cwd() / ".streamlit" / "secrets.toml",
+    ]
+
+
+def read_auth_config_from_secrets_file():
+    auth_values = {}
+    for secrets_path in get_secrets_file_candidates():
+        if not secrets_path.exists():
+            continue
+
+        current_section = ""
+        try:
+            for raw_line in secrets_path.read_text(encoding="utf-8").splitlines():
+                line = raw_line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                if line.startswith("[") and line.endswith("]"):
+                    current_section = line[1:-1].strip()
+                    continue
+                if "=" not in line:
+                    continue
+
+                key, value = line.split("=", 1)
+                key = key.strip()
+                if (key.startswith('"') and key.endswith('"')) or (key.startswith("'") and key.endswith("'")):
+                    try:
+                        key = str(literal_eval(key))
+                    except Exception:
+                        key = key.strip('"').strip("'")
+                value = value.strip()
+                try:
+                    parsed_value = literal_eval(value)
+                except Exception:
+                    parsed_value = value.strip('"').strip("'")
+
+                if current_section == "auth":
+                    auth_values[key] = str(parsed_value)
+                elif current_section == "auth.users":
+                    auth_values.setdefault("users", {})[key] = str(parsed_value)
+                elif current_section == "" and key in ("LOGISTICS_APP_USERNAME", "LOGISTICS_APP_PASSWORD"):
+                    auth_values[key] = str(parsed_value)
+        except Exception:
+            continue
+
+        if auth_values:
+            break
+
+    return auth_values
+
+
+def get_auth_users():
+    file_auth = read_auth_config_from_secrets_file()
+    username = os.getenv("LOGISTICS_APP_USERNAME", "").strip()
+    password = os.getenv("LOGISTICS_APP_PASSWORD", "")
+
+    users = {}
+    file_users = file_auth.get("users", {})
+    if isinstance(file_users, dict):
+        users.update({str(key).strip(): str(value) for key, value in file_users.items() if str(key).strip()})
+
+    username = username or file_auth.get("LOGISTICS_APP_USERNAME", "").strip() or file_auth.get("username", "").strip()
+    password = password or file_auth.get("LOGISTICS_APP_PASSWORD", "") or file_auth.get("password", "")
+
+    if username and password:
+        users.setdefault(username, password)
+
+    return users
+
+
+def logout_user():
+    st.session_state[AUTH_SESSION_KEY] = False
+    st.session_state.pop(AUTH_USER_KEY, None)
+
+
+def render_login_page():
+    render_branding()
+
+    configured_users = get_auth_users()
+    image_col, form_col = st.columns([1.15, 1], gap="large")
+
+    with image_col:
+        login_image_path = get_login_image_path()
+        if login_image_path:
+            st.markdown('<div class="login-image-frame">', unsafe_allow_html=True)
+            st.image(login_image_path, use_column_width=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.info(f"Login image not found: `{LOCAL_LOGIN_IMAGE_FILE}`")
+
+    with form_col:
+        st.markdown(
+            dedent(
+                """
+                <div class="login-card">
+                    <div class="login-kicker">Secure Access</div>
+                    <div class="login-title">Sign in to access the Logistics dispatch console</div>
+                    <div class="login-copy">Use your staff credentials to open route planning, fleet assignment, and dispatch tools.</div>
+                """
+            ),
+            unsafe_allow_html=True,
+        )
+
+        if not configured_users:
+            st.error("Login credentials are not configured yet.")
+            st.markdown("Set them in Streamlit Cloud secrets or local environment variables:")
+            st.code(
+                dedent(
+                    """
+                    [auth.users]
+                    paul = "your-password"
+                    staff_1 = "another-password"
+                    staff_2 = "another-password"
+                    """
+                ),
+                language="toml",
+            )
+            st.markdown(
+                "Or use environment variables for a single login: "
+                "`LOGISTICS_APP_USERNAME` and `LOGISTICS_APP_PASSWORD`."
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
+            return
+
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            login_clicked = st.form_submit_button("Login")
+
+        st.markdown(
+            '<div class="login-help">Only authorized staff can access dispatch and route creation tools.</div></div>',
+            unsafe_allow_html=True,
+        )
+
+        if login_clicked:
+            entered_username = username.strip()
+            configured_password = configured_users.get(entered_username)
+            username_ok = entered_username in configured_users
+            password_ok = bool(configured_password) and compare_digest(password, configured_password)
+            if username_ok and password_ok:
+                st.session_state[AUTH_SESSION_KEY] = True
+                st.session_state[AUTH_USER_KEY] = entered_username
+                st.rerun()
+            else:
+                st.error("Invalid username or password.")
+
+
+def require_login() -> bool:
+    if st.session_state.get(AUTH_SESSION_KEY):
+        return True
+    render_login_page()
+    return False
+
+
+def render_user_bar():
+    username = st.session_state.get(AUTH_USER_KEY, "")
+    left_col, right_col = st.columns([5, 1])
+    with left_col:
+        if username:
+            st.caption(f"Signed in as `{username}`")
+    with right_col:
+        if st.button("Logout", key="logout_button"):
+            logout_user()
+            st.rerun()
 
 
 def render_branding():
@@ -258,6 +440,54 @@ def render_branding():
                     color: #981f1a !important;
                     font-weight: 600;
                     text-decoration: none;
+                }
+
+                .login-card {
+                    background: rgba(255, 248, 243, 0.94);
+                    border: 1px solid rgba(255, 255, 255, 0.24);
+                    border-radius: 24px;
+                    padding: 1.4rem 1.25rem;
+                    box-shadow: 0 18px 42px rgba(77, 22, 18, 0.2);
+                    backdrop-filter: blur(10px);
+                    margin-top: 2.4rem;
+                }
+
+                .login-kicker {
+                    color: #981f1a;
+                    font-size: 0.82rem;
+                    font-weight: 700;
+                    letter-spacing: 0.08em;
+                    text-transform: uppercase;
+                    margin-bottom: 0.35rem;
+                }
+
+                .login-title {
+                    color: #5a1512;
+                    font-size: 1.8rem;
+                    font-weight: 700;
+                    line-height: 1.12;
+                    margin-bottom: 0.35rem;
+                }
+
+                .login-copy {
+                    color: #704f46;
+                    font-size: 0.98rem;
+                    margin-bottom: 1rem;
+                }
+
+                .login-help {
+                    color: #7f665e;
+                    font-size: 0.9rem;
+                    margin-top: 0.9rem;
+                }
+
+                .login-image-frame {
+                    background: rgba(255, 255, 255, 0.12);
+                    border: 1px solid rgba(255, 255, 255, 0.18);
+                    border-radius: 24px;
+                    padding: 0.65rem;
+                    box-shadow: 0 18px 42px rgba(77, 22, 18, 0.2);
+                    margin-top: 1.2rem;
                 }
             </style>
             """
@@ -937,7 +1167,11 @@ def build_routes_table(routes, delivery_suffix, collection_suffix, reverse_colle
 
 def run_fmc_dispatch():
     st.set_page_config(page_title="FMC Route Dispatch", layout="wide", initial_sidebar_state="collapsed")
+    if not require_login():
+        return
+
     render_branding()
+    render_user_bar()
     st.caption(
         "Loads route sheets such as eastlands, ngong rd, and southlands, then creates a Logistics route "
         "with delivery and collection suffixes."
