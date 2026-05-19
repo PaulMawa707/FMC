@@ -17,7 +17,7 @@ import streamlit as st
 
 
 WAREHOUSES = {
-    "FMC": {"lat":-1.188615, "lon": 36.9118451858266},
+    "FMC": {"lat": -1.1858266, "lon": 36.9101183},
 }
 
 DEFAULT_WORKBOOK = "route coordinates (004).xlsx"
@@ -26,6 +26,9 @@ DEFAULT_DELIVERY_SUFFIX = "DEL"
 DEFAULT_COLLECTION_SUFFIX = "COL"
 DEFAULT_SERVICE_TIME_SECONDS = 30 * 60
 DEFAULT_ADVANCE_TIME_SECONDS = 30 * 60
+ORDER_FLAG_COMPLETE_ON_LEAVE = 0x2
+ORDER_FLAG_START_WAREHOUSE = 260
+ORDER_FLAG_END_WAREHOUSE = 264
 REMOTE_API_URL = "https://hst-api.wialon.com/wialon/ajax.html"
 LOGISTICS_API_URL = "https://logistics.wialon.com/api/route"
 LOGISTICS_ROUTES_URL = "https://logistics.wialon.com/api/routes"
@@ -640,7 +643,8 @@ def read_delivery_sheet(excel_file: pd.ExcelFile, sheet_name: str) -> pd.DataFra
     df["LONG"] = df["LONG"].astype(float)
     df["LOCATION"] = df["LOCATION"].fillna(df["CUSTOMER NAME"]).astype(str)
     df["PRIORITY"] = range(1, len(df) + 1)
-    return df[["CUSTOMER NAME", "LOCATION", "LAT", "LONG", "TONNAGE", "AMOUNT", "PRIORITY"]]
+    df["CUSTOMER ID"] = df["CUSTOMER ID"].astype(str).str.strip()
+    return df[["CUSTOMER ID", "CUSTOMER NAME", "LOCATION", "LAT", "LONG", "TONNAGE", "AMOUNT", "PRIORITY"]]
 
 
 def read_coordinate_sheet(excel_file: pd.ExcelFile, sheet_name: str) -> pd.DataFrame:
@@ -667,7 +671,52 @@ def read_coordinate_sheet(excel_file: pd.ExcelFile, sheet_name: str) -> pd.DataF
     df["TONNAGE"] = 0.0
     df["AMOUNT"] = 0.0
     df["PRIORITY"] = range(1, len(df) + 1)
-    return df[["CUSTOMER NAME", "LOCATION", "LAT", "LONG", "TONNAGE", "AMOUNT", "PRIORITY"]]
+    df["CUSTOMER ID"] = df["CUSTOMER NAME"].astype(str).map(normalize_text)
+    return df[["CUSTOMER ID", "CUSTOMER NAME", "LOCATION", "LAT", "LONG", "TONNAGE", "AMOUNT", "PRIORITY"]]
+
+
+def customer_key_from_row(row) -> str:
+    customer_id = normalize_text(row.get("CUSTOMER ID", ""))
+    if customer_id:
+        return customer_id
+    customer_key = normalize_text(row.get("CUSTOMER KEY", ""))
+    if customer_key:
+        return customer_key
+    return normalize_text(row.get("CUSTOMER NAME", ""))
+
+
+def make_route_order_uid(route_id: int, sequence_index: int) -> int:
+    """Unique Wialon order UID per route stop (separate delivery vs collection)."""
+    return int(route_id) * 10000 + int(sequence_index)
+
+
+def compute_stop_schedule(orders_df: pd.DataFrame, wh_lat: float, wh_lon: float, tf: int) -> list[dict]:
+    schedule = []
+    planned_visit_time = int(tf)
+    prev = {"y": wh_lat, "x": wh_lon}
+    for idx, row in orders_df.reset_index(drop=True).iterrows():
+        lat = float(row["LAT"])
+        lon = float(row["LONG"])
+        service_time_seconds = int(
+            row.get("SERVICE TIME SECONDS", DEFAULT_SERVICE_TIME_SECONDS) or DEFAULT_SERVICE_TIME_SECONDS
+        )
+        polyline, mileage, travel_time_seconds = get_osrm_polyline(prev, {"y": lat, "x": lon})
+        planned_visit_time += travel_time_seconds
+        schedule.append(
+            {
+                "row_index": int(idx),
+                "row": row,
+                "planned_visit_time": planned_visit_time,
+                "travel_time_seconds": travel_time_seconds,
+                "mileage": mileage,
+                "polyline": polyline,
+                "service_time_seconds": service_time_seconds,
+                "stop_type": normalize_text(row.get("STOP TYPE", "")),
+            }
+        )
+        planned_visit_time += service_time_seconds
+        prev = {"y": lat, "x": lon}
+    return schedule
 
 
 def load_routes_from_workbook(source):
@@ -741,6 +790,10 @@ def expand_route_orders(
     reverse_collection_order: bool,
 ) -> pd.DataFrame:
     base_orders = orders_df.copy().reset_index(drop=True)
+    if "CUSTOMER ID" in base_orders.columns:
+        base_orders["CUSTOMER KEY"] = base_orders["CUSTOMER ID"].astype(str).map(normalize_text)
+    else:
+        base_orders["CUSTOMER KEY"] = base_orders["CUSTOMER NAME"].astype(str).map(normalize_text)
 
     deliveries = base_orders.copy()
     deliveries["STOP TYPE"] = "Delivery"
@@ -889,6 +942,85 @@ def test_wialon_access(token, resource_id, unit_id):
     return {"ok": ok, "checks": checks}
 
 
+def build_route_order_payload(
+    *,
+    order_uid: int,
+    order_id: int,
+    order_name: str,
+    location: str,
+    lat: float,
+    lon: float,
+    unit_id: int,
+    route_id: int,
+    sequence_index: int,
+    planned_visit_time: int,
+    advance_time_seconds: int,
+    service_time_seconds: int,
+    mileage: int,
+    travel_time_seconds: int,
+    weight_kg: int,
+    cost_val: float,
+    priority: int,
+    order_flags: int,
+    order_tf: int,
+    order_tt: int,
+    polyline,
+    current_time: int,
+    customer_key: str,
+    stop_type: str,
+    dependent_uids: list[int] | None = None,
+):
+    order_payload = {
+        "uid": order_uid,
+        "id": order_id,
+        "n": order_name,
+        "p": {
+            "ut": service_time_seconds,
+            "rep": True,
+            "w": str(weight_kg),
+            "c": str(int(cost_val)),
+            "r": {
+                "vt": planned_visit_time,
+                "ndt": advance_time_seconds,
+                "id": route_id,
+                "i": sequence_index,
+                "m": mileage,
+                "t": travel_time_seconds,
+            },
+            "u": int(unit_id),
+            "a": f"{location} ({lat}, {lon})",
+            "weight": str(weight_kg),
+            "cost": str(int(cost_val)),
+            "pr": priority,
+            "cid": f"{customer_key}|{stop_type}" if customer_key and stop_type else customer_key,
+        },
+        "f": order_flags,
+        "tf": order_tf,
+        "tt": order_tt,
+        "r": 100,
+        "y": lat,
+        "x": lon,
+        "rp": polyline,
+        "s": 0,
+        "sf": 0,
+        "trt": advance_time_seconds,
+        "st": current_time,
+        "cnm": 0,
+        "callMode": "create",
+        "u": int(unit_id),
+        "weight": str(weight_kg),
+        "cost": str(int(cost_val)),
+        "cargo": {"weight": str(weight_kg), "cost": str(int(cost_val))},
+        "cmp": {"unitRequirements": {"values": []}},
+        "gfn": {"geofences": {}},
+        "ej": {},
+        "cf": {},
+    }
+    if dependent_uids:
+        order_payload["dp"] = [int(uid) for uid in dependent_uids]
+    return order_payload
+
+
 def send_orders_and_create_route(
     token,
     resource_id,
@@ -909,10 +1041,20 @@ def send_orders_and_create_route(
         sequence_index = 0
         planned_visit_time = int(tf)
         route_orders = []
+        stop_schedule = compute_stop_schedule(orders_df, wh_lat, wh_lon, tf)
+        first_collection_visit_time = next(
+            (entry["planned_visit_time"] for entry in stop_schedule if entry["stop_type"].lower() == "collection"),
+            None,
+        )
+        delivery_completion_deadline = (first_collection_visit_time or tt) - 1
+        if delivery_completion_deadline < tf:
+            delivery_completion_deadline = tf
+        collection_start_time = first_collection_visit_time or tf
 
+        sequence_index = 0
         route_orders.append(
             {
-                "uid": int(unit_id),
+                "uid": make_route_order_uid(route_id, sequence_index),
                 "id": 0,
                 "n": warehouse_choice,
                 "p": {
@@ -933,7 +1075,7 @@ def send_orders_and_create_route(
                     "weight": "0",
                     "cost": "0",
                 },
-                "f": 260,
+                "f": ORDER_FLAG_START_WAREHOUSE,
                 "tf": tf,
                 "tt": tt,
                 "r": 100,
@@ -956,77 +1098,80 @@ def send_orders_and_create_route(
             }
         )
 
-        prev = {"y": wh_lat, "x": wh_lon}
-        for idx, row in orders_df.reset_index(drop=True).iterrows():
+        delivery_uid_by_customer: dict[str, int] = {}
+        for schedule_entry in stop_schedule:
+            row = schedule_entry["row"]
+            idx = schedule_entry["row_index"]
             lat = float(row["LAT"])
             lon = float(row["LONG"])
+            stop_type = schedule_entry["stop_type"] or "Delivery"
+            customer_key = customer_key_from_row(row)
             order_name = str(row.get("DISPLAY NAME") or row.get("CUSTOMER NAME") or f"Stop {idx + 1}")
             location = str(row.get("LOCATION") or row.get("CUSTOMER NAME") or "Unknown")
             weight_kg = int(float(row.get("TONNAGE", 0) or 0) * 1000)
             cost_val = float(row.get("AMOUNT", 0) or 0)
             priority = int(row.get("PRIORITY", idx + 1))
-            service_time_seconds = int(row.get("SERVICE TIME SECONDS", DEFAULT_SERVICE_TIME_SECONDS) or DEFAULT_SERVICE_TIME_SECONDS)
+            service_time_seconds = schedule_entry["service_time_seconds"]
             advance_time_seconds = int(row.get("ADVANCE TIME SECONDS", DEFAULT_ADVANCE_TIME_SECONDS) or DEFAULT_ADVANCE_TIME_SECONDS)
-            polyline, mileage, travel_time_seconds = get_osrm_polyline(prev, {"y": lat, "x": lon})
-            planned_visit_time += travel_time_seconds
             sequence_index += 1
+            order_uid = make_route_order_uid(route_id, sequence_index)
+            is_collection = stop_type.lower() == "collection"
+            if is_collection:
+                order_tf = max(collection_start_time, tf)
+                order_tt = tt
+                dependent_uids = [delivery_uid_by_customer[customer_key]] if customer_key in delivery_uid_by_customer else None
+            else:
+                order_tf = tf
+                order_tt = max(delivery_completion_deadline, tf)
+                dependent_uids = None
+                if customer_key:
+                    delivery_uid_by_customer[customer_key] = order_uid
 
             route_orders.append(
-                {
-                    "uid": int(unit_id),
-                    "id": idx + 1,
-                    "n": order_name,
-                    "p": {
-                        "ut": service_time_seconds,
-                        "rep": True,
-                        "w": str(weight_kg),
-                        "c": str(int(cost_val)),
-                        "r": {
-                            "vt": planned_visit_time,
-                            "ndt": advance_time_seconds,
-                            "id": route_id,
-                            "i": sequence_index,
-                            "m": mileage,
-                            "t": travel_time_seconds,
-                        },
-                        "u": int(unit_id),
-                        "a": f"{location} ({lat}, {lon})",
-                        "weight": str(weight_kg),
-                        "cost": str(int(cost_val)),
-                        "pr": priority,
-                    },
-                    "f": 0,
-                    "tf": tf,
-                    "tt": tt,
-                    "r": 100,
-                    "y": lat,
-                    "x": lon,
-                    "rp": polyline,
-                    "s": 0,
-                    "sf": 0,
-                    "trt": advance_time_seconds,
-                    "st": current_time,
-                    "cnm": 0,
-                    "callMode": "create",
-                    "u": int(unit_id),
-                    "weight": str(weight_kg),
-                    "cost": str(int(cost_val)),
-                    "cargo": {"weight": str(weight_kg), "cost": str(int(cost_val))},
-                    "cmp": {"unitRequirements": {"values": []}},
-                    "gfn": {"geofences": {}},
-                    "ej": {},
-                    "cf": {},
-                }
+                build_route_order_payload(
+                    order_uid=order_uid,
+                    order_id=idx + 1,
+                    order_name=order_name,
+                    location=location,
+                    lat=lat,
+                    lon=lon,
+                    unit_id=int(unit_id),
+                    route_id=route_id,
+                    sequence_index=sequence_index,
+                    planned_visit_time=schedule_entry["planned_visit_time"],
+                    advance_time_seconds=advance_time_seconds,
+                    service_time_seconds=service_time_seconds,
+                    mileage=schedule_entry["mileage"],
+                    travel_time_seconds=schedule_entry["travel_time_seconds"],
+                    weight_kg=weight_kg,
+                    cost_val=cost_val,
+                    priority=priority,
+                    order_flags=ORDER_FLAG_COMPLETE_ON_LEAVE,
+                    order_tf=order_tf,
+                    order_tt=order_tt,
+                    polyline=schedule_entry["polyline"],
+                    current_time=current_time,
+                    customer_key=customer_key,
+                    stop_type=stop_type,
+                    dependent_uids=dependent_uids,
+                )
             )
-            planned_visit_time += service_time_seconds
-            prev = {"y": lat, "x": lon}
 
+        last_stop = stop_schedule[-1] if stop_schedule else None
+        prev = (
+            {"y": float(last_stop["row"]["LAT"]), "x": float(last_stop["row"]["LONG"])}
+            if last_stop is not None
+            else {"y": wh_lat, "x": wh_lon}
+        )
         polyline_back, mileage_back, travel_time_back = get_osrm_polyline(prev, {"y": wh_lat, "x": wh_lon})
+        planned_visit_time = (last_stop["planned_visit_time"] if last_stop else tf) + (
+            last_stop["service_time_seconds"] if last_stop else 0
+        )
         planned_visit_time += travel_time_back
         sequence_index += 1
         route_orders.append(
             {
-                "uid": int(unit_id),
+                "uid": make_route_order_uid(route_id, sequence_index),
                 "id": len(route_orders),
                 "n": warehouse_choice,
                 "p": {
@@ -1047,7 +1192,7 @@ def send_orders_and_create_route(
                     "weight": "0",
                     "cost": "0",
                 },
-                "f": 264,
+                "f": ORDER_FLAG_END_WAREHOUSE,
                 "tf": tf,
                 "tt": tt,
                 "r": 100,
@@ -1238,23 +1383,28 @@ def run_fmc_dispatch():
             use_container_width=True,
         )
     with preview_col2:
-        render_section_header("Logistics Stop Sequence", "Expanded stop order with delivery and collection points as they will be sent.")
+        render_section_header(
+            "Logistics Stop Sequence",
+            "Deliveries are planned first, then collections on the return leg. Collection stops depend on "
+            "their matching delivery and use a later completion window so Wialon records separate visit times.",
+        )
         preview_df = expanded_orders.copy()
         preview_df["SEQUENCE"] = range(1, len(preview_df) + 1)
-        st.dataframe(
-            preview_df[
-                [
-                    "SEQUENCE",
-                    "STOP TYPE",
-                    "DISPLAY NAME",
-                    "LOCATION",
-                    "LAT",
-                    "LONG",
-                    "SERVICE TIME SECONDS",
-                    "ADVANCE TIME SECONDS",
-                ]
-            ],
-            use_container_width=True,
+        preview_columns = [
+            "SEQUENCE",
+            "STOP TYPE",
+            "CUSTOMER KEY",
+            "DISPLAY NAME",
+            "LOCATION",
+            "LAT",
+            "LONG",
+            "SERVICE TIME SECONDS",
+            "ADVANCE TIME SECONDS",
+        ]
+        st.dataframe(preview_df[[col for col in preview_columns if col in preview_df.columns]], use_container_width=True)
+        st.caption(
+            "In Logistics → Settings → Planning, set **Order sequence** to **Strict** so collection stops "
+            "are not marked visited when the vehicle arrives for delivery."
         )
 
     render_section_header("Logistics Dispatch", "Authenticate and send the selected route directly to Logistics.")
