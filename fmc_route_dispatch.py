@@ -29,6 +29,8 @@ DEFAULT_ADVANCE_TIME_SECONDS = 30 * 60
 ORDER_FLAG_COMPLETE_ON_LEAVE = 0x2
 ORDER_FLAG_START_WAREHOUSE = 260
 ORDER_FLAG_END_WAREHOUSE = 264
+ROUTE_FLAG_ANY_SEQUENCE = 0
+ROUTE_FLAG_STRICT_SEQUENCE = 1
 REMOTE_API_URL = "https://hst-api.wialon.com/wialon/ajax.html"
 LOGISTICS_API_URL = "https://logistics.wialon.com/api/route"
 LOGISTICS_ROUTES_URL = "https://logistics.wialon.com/api/routes"
@@ -1031,6 +1033,7 @@ def send_orders_and_create_route(
     tf,
     tt,
     warehouse_choice,
+    strict_visit_sequence=True,
 ):
     try:
         session_id, _ = login_wialon_session(token)
@@ -1234,7 +1237,7 @@ def send_orders_and_create_route(
                                 "routeId": route_id,
                                 "callMode": "create",
                                 "exp": 0,
-                                "f": 0,
+                                "f": ROUTE_FLAG_STRICT_SEQUENCE if strict_visit_sequence else ROUTE_FLAG_ANY_SEQUENCE,
                                 "n": final_route_name,
                                 "summary": {
                                     "countOrders": len(route_orders),
@@ -1352,6 +1355,11 @@ def run_fmc_dispatch():
     with config_col2:
         warehouse_choice = st.selectbox("Warehouse", list(WAREHOUSES.keys()))
         reverse_collection_order = st.checkbox("Reverse collection order", value=True)
+        strict_visit_sequence = st.checkbox(
+            "Strict visit sequence",
+            value=True,
+            help="Sent to Wialon as route flag f=1. API-created routes default to Any (f=0) unless this is enabled.",
+        )
     with config_col3:
         start_date = st.date_input("Start date")
         start_clock = st.time_input("Start time", value=dt_time(hour=6, minute=0), step=60)
@@ -1403,8 +1411,9 @@ def run_fmc_dispatch():
         ]
         st.dataframe(preview_df[[col for col in preview_columns if col in preview_df.columns]], use_container_width=True)
         st.caption(
-            "In Logistics → Settings → Planning, set **Order sequence** to **Strict** so collection stops "
-            "are not marked visited when the vehicle arrives for delivery."
+            "Enable **Strict visit sequence** in Route Setup so the dispatched route uses Wialon route flag "
+            "`f=1` (Strict). Without it, API routes are created as **Any** (`f=0`) even if account Planning "
+            "settings say Strict."
         )
 
     render_section_header("Logistics Dispatch", "Authenticate and send the selected route directly to Logistics.")
@@ -1456,6 +1465,7 @@ def run_fmc_dispatch():
                 tf=tf,
                 tt=tt,
                 warehouse_choice=warehouse_choice,
+                strict_visit_sequence=strict_visit_sequence,
             )
 
         if result.get("error") == 0:
