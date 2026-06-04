@@ -1376,7 +1376,7 @@ def run_fmc_dispatch():
     with date_col2:
         end_date = st.date_input("End date", value=start_date)
     with time_col1:
-        start_clock = st.time_input("Start time", value=dt_time(hour=6, minute=0), step=60)
+        start_clock = st.time_input("Start time", value=dt_time(hour=4, minute=0), step=60)
     with time_col2:
         end_clock = st.time_input("End time", value=dt_time(hour=18, minute=0), step=60)
 
