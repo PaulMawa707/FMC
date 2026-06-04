@@ -1,4 +1,5 @@
 from ast import literal_eval
+import hashlib
 import io
 import json
 import math
@@ -26,14 +27,23 @@ DEFAULT_DELIVERY_SUFFIX = "DEL"
 DEFAULT_COLLECTION_SUFFIX = "COL"
 DEFAULT_SERVICE_TIME_SECONDS = 30 * 60
 DEFAULT_ADVANCE_TIME_SECONDS = 30 * 60
+DEFAULT_COLLECTION_OFFSET_METERS = 25
+# Wialon order flags (bitmask). See Wialon Remote API `order/update` docs.
+# - 0x1: complete if there is at least one message in the order area with zero speed
+# - 0x2: complete after leaving the order area
+# - 0x4: start warehouse
+# - 0x8: final warehouse
+ORDER_FLAG_COMPLETE_ON_STOP = 0x1
 ORDER_FLAG_COMPLETE_ON_LEAVE = 0x2
-ORDER_FLAG_START_WAREHOUSE = 260
-ORDER_FLAG_END_WAREHOUSE = 264
+ORDER_FLAG_START_WAREHOUSE = 0x4
+ORDER_FLAG_END_WAREHOUSE = 0x8
 ROUTE_FLAG_ANY_SEQUENCE = 0
 ROUTE_FLAG_STRICT_SEQUENCE = 1
 REMOTE_API_URL = "https://hst-api.wialon.com/wialon/ajax.html"
 LOGISTICS_API_URL = "https://logistics.wialon.com/api/route"
 LOGISTICS_ROUTES_URL = "https://logistics.wialon.com/api/routes"
+LOGISTICS_TOKEN = "47b7b37d939f2d44f52ddf671a0ec4f0E6A9DA697BD24244C9E323E8396567A0B4B74E8D"
+LOGISTICS_RESOURCE_ID = 28277390
 FARMERS_CHOICE_WEBSITE_URL = "https://farmerschoice.co.ke/"
 FARMERS_CHOICE_LOGO_URL = "https://farmerschoice.co.ke/wp-content/uploads/2025/05/farmers-choice-logo.png"
 LOCAL_BRAND_LOGO_FILE = "farmers_choice_logo.png"
@@ -263,63 +273,75 @@ def render_branding():
         dedent(
             """
             <style>
+                :root {
+                    --fc-bg: #eef3f7;
+                    --fc-surface: #ffffff;
+                    --fc-accent: #1b5e4b;
+                    --fc-accent-hover: #164a3c;
+                    --fc-accent-soft: #e8f3ef;
+                    --fc-text: #1a2b33;
+                    --fc-muted: #5a6d78;
+                    --fc-border: rgba(27, 94, 75, 0.16);
+                }
+
                 .stApp {
                     background:
-                        radial-gradient(circle at top right, rgba(255, 214, 196, 0.18), transparent 24%),
-                        radial-gradient(circle at bottom left, rgba(255, 184, 150, 0.12), transparent 22%),
-                        linear-gradient(180deg, #7d1714 0%, #981f1a 42%, #b43325 100%);
-                    color: #fff7f0;
+                        radial-gradient(circle at 8% 12%, rgba(27, 94, 75, 0.07), transparent 34%),
+                        radial-gradient(circle at 92% 88%, rgba(59, 130, 180, 0.06), transparent 30%),
+                        linear-gradient(165deg, #f8fbfd 0%, var(--fc-bg) 55%, #e8eef3 100%);
+                    color: var(--fc-text);
                 }
 
                 .stApp [data-testid="stHeader"] {
                     background: rgba(0, 0, 0, 0);
                 }
 
-                .stApp [data-testid="stSidebar"] {
-                    display: none;
-                }
-
-                .stApp [data-testid="collapsedControl"] {
-                    display: none;
-                }
-
+                .stApp [data-testid="stSidebar"],
+                .stApp [data-testid="collapsedControl"],
                 .stApp section[data-testid="stSidebar"] {
                     display: none;
                 }
 
+                h1, h2, h3, .stMarkdown p, .stMarkdown li {
+                    color: var(--fc-text);
+                }
+
                 .section-shell {
-                    background: rgba(255, 255, 255, 0.76);
-                    border: 1px solid rgba(111, 23, 21, 0.12);
-                    border-left: 5px solid #981f1a;
-                    border-radius: 16px;
-                    padding: 0.9rem 1rem;
-                    margin: 1rem 0 0.8rem;
-                    box-shadow: 0 10px 22px rgba(65, 42, 30, 0.05);
+                    background: var(--fc-surface);
+                    border: 1px solid var(--fc-border);
+                    border-left: 4px solid var(--fc-accent);
+                    border-radius: 14px;
+                    padding: 0.85rem 1rem;
+                    margin: 0.75rem 0 0.65rem;
+                    box-shadow: 0 6px 20px rgba(26, 43, 51, 0.06);
                 }
 
                 .section-title {
                     margin: 0;
-                    color: #6f1715;
-                    font-size: 1.08rem;
+                    color: var(--fc-accent);
+                    font-size: 1.05rem;
                     font-weight: 700;
                 }
 
                 .section-caption {
                     margin: 0.2rem 0 0;
-                    color: #5f4b43;
-                    font-size: 0.92rem;
+                    color: var(--fc-muted);
+                    font-size: 0.9rem;
                 }
 
                 .stButton > button {
-                    background: linear-gradient(135deg, #981f1a, #bf3a2b);
-                    color: white;
+                    background: linear-gradient(135deg, var(--fc-accent) 0%, #227a63 100%);
+                    color: #fff;
                     border: none;
                     border-radius: 10px;
+                    font-weight: 600;
+                    box-shadow: 0 3px 10px rgba(27, 94, 75, 0.22);
                 }
 
                 .stButton > button:hover {
-                    background: linear-gradient(135deg, #821814, #a62f23);
-                    color: white;
+                    background: var(--fc-accent-hover);
+                    color: #fff;
+                    border: none;
                 }
 
                 .stTextInput label p,
@@ -327,42 +349,27 @@ def render_branding():
                 .stTimeInput label p,
                 .stSelectbox label p,
                 .stCheckbox label p,
-                .stFileUploader label p {
-                    color: #4d2f29 !important;
+                .stFileUploader label p,
+                .stNumberInput label p {
+                    color: var(--fc-text) !important;
                     font-weight: 600;
                 }
 
-                .stDateInput input,
-                .stNumberInput input {
-                    background-color: rgba(255, 255, 255, 0.96) !important;
-                    color: #2f241f !important;
-                    -webkit-text-fill-color: #2f241f !important;
-                    border: 1px solid rgba(111, 23, 21, 0.28) !important;
-                    border-radius: 10px !important;
-                }
-
                 .stTextInput input,
-                .stTextInput textarea {
-                    background: linear-gradient(135deg, #7d1714, #9c251d) !important;
-                    color: #fff7f0 !important;
-                    -webkit-text-fill-color: #fff7f0 !important;
-                    border: 1px solid rgba(255, 247, 240, 0.32) !important;
+                .stTextInput textarea,
+                .stDateInput input,
+                .stTimeInput input,
+                .stNumberInput input {
+                    background-color: var(--fc-surface) !important;
+                    color: var(--fc-text) !important;
+                    -webkit-text-fill-color: var(--fc-text) !important;
+                    border: 1px solid var(--fc-border) !important;
                     border-radius: 10px !important;
-                    caret-color: #fff7f0 !important;
-                }
-
-                .stTimeInput input {
-                    background: linear-gradient(135deg, #7d1714, #9c251d) !important;
-                    color: #fff7f0 !important;
-                    -webkit-text-fill-color: #fff7f0 !important;
-                    border: 1px solid rgba(255, 247, 240, 0.32) !important;
-                    border-radius: 10px !important;
+                    caret-color: var(--fc-text) !important;
                 }
 
                 .stTimeInput input[type="time"] {
                     font-weight: 600 !important;
-                    letter-spacing: 0.02em;
-                    caret-color: #fff7f0 !important;
                 }
 
                 .stTimeInput input[type="time"]::-webkit-datetime-edit,
@@ -371,94 +378,67 @@ def render_branding():
                 .stTimeInput input[type="time"]::-webkit-datetime-edit-minute-field,
                 .stTimeInput input[type="time"]::-webkit-datetime-edit-ampm-field,
                 .stTimeInput input[type="time"]::-webkit-datetime-edit-text {
-                    color: #fff7f0 !important;
-                    -webkit-text-fill-color: #fff7f0 !important;
-                }
-
-                .stTimeInput input[type="time"]::-webkit-calendar-picker-indicator {
-                    filter: brightness(0) invert(1);
-                    opacity: 1;
-                }
-
-                .stTextInput input::placeholder,
-                .stTextInput textarea::placeholder {
-                    color: rgba(255, 247, 240, 0.72) !important;
-                }
-
-                .stDateInput input::placeholder,
-                .stTimeInput input::placeholder {
-                    color: #8c776f !important;
+                    color: var(--fc-text) !important;
+                    -webkit-text-fill-color: var(--fc-text) !important;
                 }
 
                 .stSelectbox div[data-baseweb="select"] > div {
-                    background-color: rgba(255, 255, 255, 0.96) !important;
-                    border: 1px solid rgba(111, 23, 21, 0.28) !important;
+                    background-color: var(--fc-surface) !important;
+                    border: 1px solid var(--fc-border) !important;
                     border-radius: 10px !important;
-                    color: #2f241f !important;
-                    -webkit-text-fill-color: #2f241f !important;
+                    color: var(--fc-text) !important;
                 }
 
                 .stSelectbox div[data-baseweb="select"] *,
                 .stDateInput * {
-                    color: #2f241f !important;
-                    -webkit-text-fill-color: #2f241f !important;
+                    color: var(--fc-text) !important;
                 }
 
-                .stSelectbox div[data-baseweb="select"] * {
-                    background-color: transparent !important;
-                }
-
-                div[role="listbox"] {
-                    background-color: rgba(255, 250, 246, 0.98) !important;
-                    color: #2f241f !important;
-                }
-
+                div[role="listbox"],
                 div[role="option"] {
-                    background-color: rgba(255, 250, 246, 0.98) !important;
-                    color: #2f241f !important;
+                    background-color: var(--fc-surface) !important;
+                    color: var(--fc-text) !important;
                 }
 
                 .stTextInput input:disabled,
                 .stTextArea textarea:disabled {
-                    background-color: rgba(244, 236, 228, 0.98) !important;
-                    color: #4d2f29 !important;
-                    -webkit-text-fill-color: #4d2f29 !important;
+                    background-color: #e4eaef !important;
+                    color: var(--fc-muted) !important;
                     opacity: 1 !important;
                 }
 
                 .stCaption {
-                    color: #6a5047 !important;
+                    color: var(--fc-muted) !important;
                 }
 
                 .stCheckbox div[data-testid="stMarkdownContainer"] p {
-                    color: #4d2f29 !important;
+                    color: var(--fc-text) !important;
                 }
 
                 div[data-testid="stDataFrame"] {
-                    border: 1px solid rgba(111, 23, 21, 0.12);
-                    border-radius: 14px;
+                    border: 1px solid var(--fc-border);
+                    border-radius: 12px;
                     overflow: hidden;
-                    box-shadow: 0 8px 18px rgba(65, 42, 30, 0.05);
+                    box-shadow: 0 4px 14px rgba(26, 43, 51, 0.05);
                 }
 
                 .brand-link {
-                    color: #981f1a !important;
+                    color: var(--fc-accent) !important;
                     font-weight: 600;
                     text-decoration: none;
                 }
 
                 .login-card {
-                    background: rgba(255, 248, 243, 0.94);
-                    border: 1px solid rgba(255, 255, 255, 0.24);
-                    border-radius: 24px;
+                    background: var(--fc-surface);
+                    border: 1px solid var(--fc-border);
+                    border-radius: 20px;
                     padding: 1.4rem 1.25rem;
-                    box-shadow: 0 18px 42px rgba(77, 22, 18, 0.2);
-                    backdrop-filter: blur(10px);
-                    margin-top: 2.4rem;
+                    box-shadow: 0 14px 36px rgba(26, 43, 51, 0.09);
+                    margin-top: 2rem;
                 }
 
                 .login-kicker {
-                    color: #981f1a;
+                    color: var(--fc-accent);
                     font-size: 0.82rem;
                     font-weight: 700;
                     letter-spacing: 0.08em;
@@ -467,31 +447,29 @@ def render_branding():
                 }
 
                 .login-title {
-                    color: #5a1512;
-                    font-size: 1.8rem;
+                    color: var(--fc-text);
+                    font-size: 1.75rem;
                     font-weight: 700;
                     line-height: 1.12;
                     margin-bottom: 0.35rem;
                 }
 
-                .login-copy {
-                    color: #704f46;
-                    font-size: 0.98rem;
-                    margin-bottom: 1rem;
+                .login-copy,
+                .login-help {
+                    color: var(--fc-muted);
+                    font-size: 0.95rem;
                 }
 
                 .login-help {
-                    color: #7f665e;
-                    font-size: 0.9rem;
                     margin-top: 0.9rem;
                 }
 
                 .login-image-frame {
-                    background: rgba(255, 255, 255, 0.12);
-                    border: 1px solid rgba(255, 255, 255, 0.18);
-                    border-radius: 24px;
+                    background: var(--fc-surface);
+                    border: 1px solid var(--fc-border);
+                    border-radius: 20px;
                     padding: 0.65rem;
-                    box-shadow: 0 18px 42px rgba(77, 22, 18, 0.2);
+                    box-shadow: 0 12px 32px rgba(44, 36, 32, 0.08);
                     margin-top: 1.2rem;
                 }
             </style>
@@ -790,6 +768,7 @@ def expand_route_orders(
     delivery_suffix: str,
     collection_suffix: str,
     reverse_collection_order: bool,
+    collection_offset_meters: float = DEFAULT_COLLECTION_OFFSET_METERS,
 ) -> pd.DataFrame:
     base_orders = orders_df.copy().reset_index(drop=True)
     if "CUSTOMER ID" in base_orders.columns:
@@ -817,7 +796,46 @@ def expand_route_orders(
     expanded["LAT"] = pd.to_numeric(expanded["LAT"], errors="coerce")
     expanded["LONG"] = pd.to_numeric(expanded["LONG"], errors="coerce")
     expanded = expanded.dropna(subset=["LAT", "LONG"]).reset_index(drop=True)
+
+    offset_meters = float(collection_offset_meters or 0)
+    if offset_meters > 0:
+        collection_mask = expanded["STOP TYPE"].astype(str).str.lower() == "collection"
+        for idx in expanded.index[collection_mask]:
+            row = expanded.loc[idx]
+            lat = float(row["LAT"])
+            lon = float(row["LONG"])
+            seed = customer_key_from_row(row) or str(row.get("CUSTOMER NAME", ""))
+            bearing = collection_offset_bearing_degrees(seed)
+            new_lat, new_lon = offset_coordinates_by_distance_and_bearing(lat, lon, offset_meters, bearing)
+            expanded.at[idx, "LAT"] = new_lat
+            expanded.at[idx, "LONG"] = new_lon
+            expanded.at[idx, "COL OFFSET BEARING"] = bearing
+
     return expanded
+
+
+def collection_offset_bearing_degrees(seed: str) -> float:
+    """Stable pseudo-random bearing (0-360) per customer so COL points scatter around DEL."""
+    digest = hashlib.sha256(normalize_text(seed).encode("utf-8")).hexdigest()
+    return (int(digest[:8], 16) % 36000) / 100.0
+
+
+def offset_coordinates_meters(lat: float, lon: float, meters_north: float = 0.0, meters_east: float = 0.0) -> tuple[float, float]:
+    """Shift a point by meters (north = +lat, east = +lon) using a local flat-earth approximation."""
+    lat_offset = meters_north / 111_320.0
+    lon_scale = 111_320.0 * math.cos(math.radians(lat))
+    lon_offset = meters_east / lon_scale if lon_scale else 0.0
+    return lat + lat_offset, lon + lon_offset
+
+
+def offset_coordinates_by_distance_and_bearing(
+    lat: float, lon: float, distance_meters: float, bearing_degrees: float
+) -> tuple[float, float]:
+    """bearing 0 = north, 90 = east."""
+    bearing_rad = math.radians(bearing_degrees)
+    meters_north = distance_meters * math.cos(bearing_rad)
+    meters_east = distance_meters * math.sin(bearing_rad)
+    return offset_coordinates_meters(lat, lon, meters_north=meters_north, meters_east=meters_east)
 
 
 def calc_distance_km(y1, x1, y2, x2):
@@ -1045,16 +1063,9 @@ def send_orders_and_create_route(
         planned_visit_time = int(tf)
         route_orders = []
         stop_schedule = compute_stop_schedule(orders_df, wh_lat, wh_lon, tf)
-        first_collection_visit_time = next(
-            (entry["planned_visit_time"] for entry in stop_schedule if entry["stop_type"].lower() == "collection"),
-            None,
-        )
-        delivery_completion_deadline = (first_collection_visit_time or tt) - 1
-        if delivery_completion_deadline < tf:
-            delivery_completion_deadline = tf
-        collection_start_time = first_collection_visit_time or tf
 
         sequence_index = 0
+        delivery_uid_by_customer_key: dict[str, int] = {}
         route_orders.append(
             {
                 "uid": make_route_order_uid(route_id, sequence_index),
@@ -1101,7 +1112,6 @@ def send_orders_and_create_route(
             }
         )
 
-        delivery_uid_by_customer: dict[str, int] = {}
         for schedule_entry in stop_schedule:
             row = schedule_entry["row"]
             idx = schedule_entry["row_index"]
@@ -1116,19 +1126,32 @@ def send_orders_and_create_route(
             priority = int(row.get("PRIORITY", idx + 1))
             service_time_seconds = schedule_entry["service_time_seconds"]
             advance_time_seconds = int(row.get("ADVANCE TIME SECONDS", DEFAULT_ADVANCE_TIME_SECONDS) or DEFAULT_ADVANCE_TIME_SECONDS)
+            planned_arrival = int(schedule_entry["planned_visit_time"])
             sequence_index += 1
             order_uid = make_route_order_uid(route_id, sequence_index)
             is_collection = stop_type.lower() == "collection"
             if is_collection:
-                order_tf = max(collection_start_time, tf)
-                order_tt = tt
-                dependent_uids = [delivery_uid_by_customer[customer_key]] if customer_key in delivery_uid_by_customer else None
+                # Each collection opens only when this outlet's planned return visit starts,
+                # not when the last delivery on the route finishes.
+                order_tf = max(planned_arrival - advance_time_seconds, int(tf))
+                order_tt = planned_arrival + service_time_seconds + advance_time_seconds
+                paired_delivery_uid = delivery_uid_by_customer_key.get(customer_key)
+                dependent_uids = [paired_delivery_uid] if paired_delivery_uid else None
             else:
-                order_tf = tf
-                order_tt = max(delivery_completion_deadline, tf)
+                order_tf = int(tf)
+                order_tt = planned_arrival + service_time_seconds + advance_time_seconds
                 dependent_uids = None
-                if customer_key:
-                    delivery_uid_by_customer[customer_key] = order_uid
+                delivery_uid_by_customer_key[customer_key] = order_uid
+
+            # Wialon requires `tf < tt` for every order.
+            # If the planned schedule exceeds the selected route end time, clamp the window.
+            order_tf = int(order_tf)
+            order_tt = int(order_tt)
+            if order_tf >= int(tt):
+                order_tf = int(tt) - 1
+            order_tt = min(order_tt, int(tt))
+            if order_tt <= order_tf:
+                order_tt = order_tf + 1
 
             route_orders.append(
                 build_route_order_payload(
@@ -1149,7 +1172,7 @@ def send_orders_and_create_route(
                     weight_kg=weight_kg,
                     cost_val=cost_val,
                     priority=priority,
-                    order_flags=ORDER_FLAG_COMPLETE_ON_LEAVE,
+                    order_flags=(ORDER_FLAG_COMPLETE_ON_STOP | ORDER_FLAG_COMPLETE_ON_LEAVE),
                     order_tf=order_tf,
                     order_tt=order_tt,
                     polyline=schedule_entry["polyline"],
@@ -1319,11 +1342,6 @@ def run_fmc_dispatch():
         return
 
     render_branding()
-    render_user_bar()
-    st.caption(
-        "Loads route sheets such as eastlands, ngong rd, and southlands, then creates a Logistics route "
-        "with delivery and collection suffixes."
-    )
 
     workbook_source = resolve_workbook_source(None)
     if workbook_source is None:
@@ -1345,26 +1363,21 @@ def run_fmc_dispatch():
         except Exception as exc:
             fleet_error = str(exc)
 
-    render_section_header("Route Setup", "Choose route labels, warehouse, and the exact dispatch time window.")
-    config_col1, config_col2, config_col3, config_col4 = st.columns(4)
-    with config_col1:
-        delivery_suffix = st.text_input("Delivery suffix", value=DEFAULT_DELIVERY_SUFFIX).strip() or DEFAULT_DELIVERY_SUFFIX
-        collection_suffix = (
-            st.text_input("Collection suffix", value=DEFAULT_COLLECTION_SUFFIX).strip() or DEFAULT_COLLECTION_SUFFIX
-        )
-    with config_col2:
-        warehouse_choice = st.selectbox("Warehouse", list(WAREHOUSES.keys()))
-        reverse_collection_order = st.checkbox("Reverse collection order", value=True)
-        strict_visit_sequence = st.checkbox(
-            "Strict visit sequence",
-            value=True,
-            help="Sent to Wialon as route flag f=1. API-created routes default to Any (f=0) unless this is enabled.",
-        )
-    with config_col3:
+    delivery_suffix = DEFAULT_DELIVERY_SUFFIX
+    collection_suffix = DEFAULT_COLLECTION_SUFFIX
+    warehouse_choice = next(iter(WAREHOUSES))
+    reverse_collection_order = True
+    collection_offset_meters = float(DEFAULT_COLLECTION_OFFSET_METERS)
+    strict_visit_sequence = False
+
+    date_col1, date_col2, time_col1, time_col2 = st.columns(4)
+    with date_col1:
         start_date = st.date_input("Start date")
-        start_clock = st.time_input("Start time", value=dt_time(hour=6, minute=0), step=60)
-    with config_col4:
+    with date_col2:
         end_date = st.date_input("End date", value=start_date)
+    with time_col1:
+        start_clock = st.time_input("Start time", value=dt_time(hour=6, minute=0), step=60)
+    with time_col2:
         end_clock = st.time_input("End time", value=dt_time(hour=18, minute=0), step=60)
 
     render_section_header("Available Routes", "Review the route sheets loaded from the workbook before dispatch.")
@@ -1381,6 +1394,7 @@ def run_fmc_dispatch():
         delivery_suffix=delivery_suffix,
         collection_suffix=collection_suffix,
         reverse_collection_order=reverse_collection_order,
+        collection_offset_meters=collection_offset_meters,
     )
 
     preview_col1, preview_col2 = st.columns(2)
@@ -1393,8 +1407,8 @@ def run_fmc_dispatch():
     with preview_col2:
         render_section_header(
             "Logistics Stop Sequence",
-            "Deliveries are planned first, then collections on the return leg. Collection stops depend on "
-            "their matching delivery and use a later completion window so Wialon records separate visit times.",
+            "Deliveries use workbook coordinates; collections are offset from delivery coords per outlet. "
+            "Each collection unlocks only after that outlet's delivery is done.",
         )
         preview_df = expanded_orders.copy()
         preview_df["SEQUENCE"] = range(1, len(preview_df) + 1)
@@ -1406,44 +1420,32 @@ def run_fmc_dispatch():
             "LOCATION",
             "LAT",
             "LONG",
+            "COL OFFSET BEARING",
             "SERVICE TIME SECONDS",
             "ADVANCE TIME SECONDS",
         ]
         st.dataframe(preview_df[[col for col in preview_columns if col in preview_df.columns]], use_container_width=True)
-        st.caption(
-            "Enable **Strict visit sequence** in Route Setup so the dispatched route uses Wialon route flag "
-            "`f=1` (Strict). Without it, API routes are created as **Any** (`f=0`) even if account Planning "
-            "settings say Strict."
-        )
 
-    render_section_header("Logistics Dispatch", "Authenticate and send the selected route directly to Logistics.")
-    dispatch_col1, dispatch_col2 = st.columns(2)
-    with dispatch_col1:
-        token = st.text_input("Logistics token", type="password")
-        resource_id = st.text_input("Logistics resource ID")
-    with dispatch_col2:
-        if not fleet_df.empty:
-            asset_label = st.selectbox("Vehicle", fleet_df["asset_label"].tolist())
-            selected_asset = fleet_df[fleet_df["asset_label"] == asset_label].iloc[0]
-            vehicle_name = str(selected_asset["asset_name"])
-            unit_id = str(selected_asset["itemid"])
-            st.caption(f"Fleet source: `{get_source_name(fleet_source)}`")
-            st.text_input("Vehicle name", value=vehicle_name, disabled=True)
-            st.text_input("Logistics unit ID", value=unit_id, disabled=True)
+    render_section_header("Logistics Dispatch", "Choose a vehicle and send the selected route to Logistics.")
+    if not fleet_df.empty:
+        asset_label = st.selectbox("Vehicle", fleet_df["asset_label"].tolist())
+        selected_asset = fleet_df[fleet_df["asset_label"] == asset_label].iloc[0]
+        vehicle_name = str(selected_asset["asset_name"])
+        unit_id = str(selected_asset["itemid"])
+    else:
+        if fleet_error:
+            st.warning(f"Fleet file could not be loaded: {fleet_error}")
         else:
-            if fleet_error:
-                st.warning(f"Fleet file could not be loaded: {fleet_error}")
-            else:
-                st.info(f"No fleet file found. Expected `{DEFAULT_FLEET_WORKBOOK}` next to this script.")
-            vehicle_name = st.text_input("Vehicle name")
-            unit_id = st.text_input("Logistics unit ID")
+            st.info(f"No fleet file found. Expected `{DEFAULT_FLEET_WORKBOOK}` next to this script.")
+        vehicle_name = st.text_input("Vehicle name")
+        unit_id = st.text_input("Logistics unit ID")
 
     st.session_state.pop("wialon_access_test", None)
     dispatch_clicked = st.button("Dispatch selected route", type="primary")
 
     if dispatch_clicked:
-        if not token or not resource_id or not vehicle_name or not unit_id:
-            st.error("Token, resource ID, vehicle name, and unit ID are required.")
+        if not vehicle_name or not unit_id:
+            st.error("Vehicle name and unit ID are required.")
             return
 
         tz = pytz.timezone("Africa/Nairobi")
@@ -1456,8 +1458,8 @@ def run_fmc_dispatch():
 
         with st.spinner("Dispatching route to Logistics..."):
             result = send_orders_and_create_route(
-                token=token,
-                resource_id=int(resource_id),
+                token=LOGISTICS_TOKEN,
+                resource_id=LOGISTICS_RESOURCE_ID,
                 unit_id=int(unit_id),
                 vehicle_name=vehicle_name,
                 route_name=selected_route["route_name"],
