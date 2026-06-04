@@ -759,8 +759,7 @@ def read_fleet_assets(source) -> pd.DataFrame:
     fleet_df = fleet_df[fleet_df["asset_name"] != ""].copy()
     fleet_df["asset_norm"] = fleet_df["asset_name"].map(normalize_plate)
     fleet_df = fleet_df.sort_values(["asset_norm", "asset_name"]).drop_duplicates(subset=["itemid"]).reset_index(drop=True)
-    fleet_df["asset_label"] = fleet_df["asset_name"] + " (ID: " + fleet_df["itemid"].astype(str) + ")"
-    return fleet_df[["asset_name", "asset_norm", "itemid", "asset_label"]]
+    return fleet_df[["asset_name", "asset_norm", "itemid"]]
 
 
 def expand_route_orders(
@@ -1428,8 +1427,8 @@ def run_fmc_dispatch():
 
     render_section_header("Logistics Dispatch", "Choose a vehicle and send the selected route to Logistics.")
     if not fleet_df.empty:
-        asset_label = st.selectbox("Vehicle", fleet_df["asset_label"].tolist())
-        selected_asset = fleet_df[fleet_df["asset_label"] == asset_label].iloc[0]
+        selected_vehicle_name = st.selectbox("Vehicle", fleet_df["asset_name"].tolist())
+        selected_asset = fleet_df[fleet_df["asset_name"] == selected_vehicle_name].iloc[0]
         vehicle_name = str(selected_asset["asset_name"])
         unit_id = str(selected_asset["itemid"])
     else:
