@@ -26,7 +26,7 @@ DEFAULT_FLEET_WORKBOOK = "FCL_Vehicles.xlsx"
 DEFAULT_DELIVERY_SUFFIX = "DEL"
 DEFAULT_COLLECTION_SUFFIX = "COL"
 DEFAULT_SERVICE_TIME_SECONDS = 30 * 60
-DEFAULT_ADVANCE_TIME_SECONDS = 30 * 60
+DEFAULT_ADVANCE_TIME_SECONDS = 0
 DEFAULT_COLLECTION_OFFSET_METERS = 25
 # Wialon order flags (bitmask). See Wialon Remote API `order/update` docs.
 # - 0x1: complete if there is at least one message in the order area with zero speed
@@ -888,6 +888,80 @@ def search_wialon_item(session_id, item_id, flags=1):
     return requests.post(REMOTE_API_URL, data=payload, headers=headers, timeout=30).json()
 
 
+def execute_wialon_batch(session_id, call_params: list[dict], timeout: int = 90):
+    if not call_params:
+        return []
+    payload = {
+        "svc": "core/batch",
+        "params": json.dumps({"params": call_params, "flags": 0}),
+        "sid": session_id,
+    }
+    return requests.post(REMOTE_API_URL, data=payload, timeout=timeout).json()
+
+
+def extract_route_orders(route_result) -> list[dict]:
+    orders: list[dict] = []
+
+    def collect(node):
+        if isinstance(node, dict):
+            node_orders = node.get("orders")
+            if isinstance(node_orders, list):
+                for order in node_orders:
+                    if isinstance(order, dict) and order.get("id") is not None:
+                        orders.append(order)
+            for value in node.values():
+                collect(value)
+        elif isinstance(node, list):
+            for item in node:
+                collect(item)
+
+    collect(route_result)
+    deduped = []
+    seen_ids = set()
+    for order in orders:
+        order_id = int(order["id"])
+        if order_id in seen_ids:
+            continue
+        seen_ids.add(order_id)
+        deduped.append(order)
+    return deduped
+
+
+def assign_route_orders_to_unit(session_id, resource_id, unit_id, created_orders: list[dict]) -> tuple[bool, str]:
+    order_ids = [int(order["id"]) for order in created_orders if order.get("id") is not None]
+    if not order_ids:
+        return False, "Route was created but Logistics did not return order IDs to assign the vehicle."
+
+    chunk_size = 40
+    assigned_count = 0
+    for offset in range(0, len(order_ids), chunk_size):
+        chunk = order_ids[offset : offset + chunk_size]
+        batch_calls = [
+            {
+                "svc": "order/update",
+                "params": {
+                    "itemId": int(resource_id),
+                    "id": order_id,
+                    "u": int(unit_id),
+                    "callMode": "assign",
+                },
+            }
+            for order_id in chunk
+        ]
+        assign_result = execute_wialon_batch(session_id, batch_calls, timeout=120)
+        if isinstance(assign_result, list):
+            for item in assign_result:
+                if isinstance(item, dict) and item.get("error", 0) != 0:
+                    return False, format_wialon_error(item, fallback="Failed to assign vehicle to route orders.")
+            assigned_count += len(chunk)
+            continue
+        if isinstance(assign_result, dict) and assign_result.get("error", 0) != 0:
+            return False, format_wialon_error(assign_result, fallback="Failed to assign vehicle to route orders.")
+        assigned_count += len(chunk)
+
+    return True, f"Assigned vehicle to {assigned_count} route orders."
+
+
 def test_wialon_access(token, resource_id, unit_id):
     checks = []
     ok = True
@@ -1246,52 +1320,67 @@ def send_orders_and_create_route(
         total_weight = sum(int(order["p"]["w"]) for order in route_orders if order["f"] == 0)
         final_route_name = f"{normalize_route_name(route_name)} - {vehicle_name} - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
-        batch_payload = {
-            "svc": "core/batch",
-            "params": json.dumps(
+        route_result = execute_wialon_batch(
+            session_id,
+            [
                 {
-                    "params": [
-                        {
-                            "svc": "order/route_update",
-                            "params": {
-                                "itemId": int(resource_id),
-                                "orders": route_orders,
-                                "routeId": route_id,
-                                "callMode": "create",
-                                "exp": 0,
-                                "f": ROUTE_FLAG_STRICT_SEQUENCE if strict_visit_sequence else ROUTE_FLAG_ANY_SEQUENCE,
-                                "n": final_route_name,
-                                "summary": {
-                                    "countOrders": len(route_orders),
-                                    "mileage": total_mileage,
-                                    "priceMileage": 0,
-                                    "priceTotal": total_cost,
-                                    "weight": total_weight,
-                                    "cost": total_cost,
-                                },
-                            },
-                        }
-                    ],
-                    "flags": 0,
+                    "svc": "order/route_update",
+                    "params": {
+                        "itemId": int(resource_id),
+                        "orders": route_orders,
+                        "routeId": route_id,
+                        "callMode": "create",
+                        "exp": 0,
+                        "f": ROUTE_FLAG_STRICT_SEQUENCE if strict_visit_sequence else ROUTE_FLAG_ANY_SEQUENCE,
+                        "n": final_route_name,
+                        "summary": {
+                            "countOrders": len(route_orders),
+                            "mileage": total_mileage,
+                            "priceMileage": 0,
+                            "priceTotal": total_cost,
+                            "weight": total_weight,
+                            "cost": total_cost,
+                        },
+                    },
                 }
-            ),
-            "sid": session_id,
-        }
+            ],
+            timeout=90,
+        )
 
-        route_result = requests.post(REMOTE_API_URL, data=batch_payload, timeout=90).json()
+        create_ok = False
         if isinstance(route_result, list):
-            first = route_result[0]
-            if isinstance(first, dict) and first.get("error", 0) == 0:
-                planning_url = f"https://apps.wialon.com/logistics/?lang=en&sid={session_id}#/distrib/step3"
-                return {"error": 0, "message": "Route created successfully", "planning_url": planning_url}
-            return {"error": first.get("error", 1), "message": format_wialon_error(first)}
-        if isinstance(route_result, dict) and route_result.get("error", 0) == 0:
-            planning_url = f"https://apps.wialon.com/logistics/?lang=en&sid={session_id}#/distrib/step3"
-            return {"error": 0, "message": "Route created successfully", "planning_url": planning_url}
-        if isinstance(route_result, dict) and route_result.get("orders"):
-            planning_url = f"https://apps.wialon.com/logistics/?lang=en&sid={session_id}#/distrib/step3"
-            return {"error": 0, "message": "Route created successfully", "planning_url": planning_url}
-        return {"error": 1, "message": format_wialon_error(route_result)}
+            first = route_result[0] if route_result else {}
+            create_ok = isinstance(first, dict) and (
+                first.get("error", 0) == 0 or isinstance(first.get("orders"), list)
+            )
+            if not create_ok:
+                return {"error": first.get("error", 1) if isinstance(first, dict) else 1, "message": format_wialon_error(first)}
+        elif isinstance(route_result, dict):
+            create_ok = route_result.get("error", 0) == 0 or isinstance(route_result.get("orders"), list)
+            if not create_ok:
+                return {"error": route_result.get("error", 1), "message": format_wialon_error(route_result)}
+        else:
+            return {"error": 1, "message": format_wialon_error(route_result)}
+
+        created_orders = extract_route_orders(route_result)
+        assign_ok, assign_message = assign_route_orders_to_unit(
+            session_id,
+            resource_id,
+            unit_id,
+            created_orders,
+        )
+        planning_url = f"https://apps.wialon.com/logistics/?lang=en&sid={session_id}#/distrib/step3"
+        if not assign_ok:
+            return {
+                "error": 1,
+                "message": f"Route created but vehicle was not picked up in Logistics. {assign_message}",
+                "planning_url": planning_url,
+            }
+        return {
+            "error": 0,
+            "message": f"Route created and vehicle assigned. {assign_message}",
+            "planning_url": planning_url,
+        }
     except Exception as exc:
         return {"error": 1, "message": str(exc)}
 
