@@ -18,7 +18,7 @@ import streamlit as st
 
 
 WAREHOUSES = {
-    "FMC": {"lat": -1.1858266, "lon": 36.9101183},
+    "FMC": {"lat": -1.188615, "lon": 36.911845},
 }
 
 DEFAULT_WORKBOOK = "route coordinates (004).xlsx"
