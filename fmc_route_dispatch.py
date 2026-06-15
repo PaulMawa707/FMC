@@ -25,9 +25,14 @@ DEFAULT_WORKBOOK = "route coordinates (004).xlsx"
 DEFAULT_FLEET_WORKBOOK = "FCL_Vehicles.xlsx"
 DEFAULT_DELIVERY_SUFFIX = "DEL"
 DEFAULT_COLLECTION_SUFFIX = "COL"
-DEFAULT_SERVICE_TIME_SECONDS = 30 * 60
+DEFAULT_SERVICE_TIME_SECONDS = 15 * 60
 DEFAULT_ADVANCE_TIME_SECONDS = 0
 DEFAULT_COLLECTION_OFFSET_METERS = 25
+DEFAULT_ROUTE_VEHICLE_MAP = {
+    "eastlands route": "FCL - KBT 227L",
+    "ngong rd route": "FCL - KBV 586L",
+    "southlands route": "FCL - KCF 844G",
+}
 # Wialon order flags (bitmask). See Wialon Remote API `order/update` docs.
 # - 0x1: complete if there is at least one message in the order area with zero speed
 # - 0x2: complete after leaving the order area
@@ -670,6 +675,63 @@ def make_route_order_uid(route_id: int, sequence_index: int) -> int:
     return int(route_id) * 10000 + int(sequence_index)
 
 
+def allocate_route_id() -> int:
+    """Unique route id even when several routes are dispatched within the same second."""
+    return int(time.time_ns() // 1_000_000)
+
+
+def summarize_expanded_orders(orders_df: pd.DataFrame) -> dict:
+    stop_types = orders_df.get("STOP TYPE", pd.Series(dtype=str)).astype(str).str.lower()
+    deliveries = int((stop_types == "delivery").sum())
+    collections = int((stop_types == "collection").sum())
+    display_names = orders_df.get("DISPLAY NAME", orders_df.get("CUSTOMER NAME", pd.Series(dtype=str))).astype(str)
+    del_suffix = int(display_names.str.contains(r" - DEL$", case=False, regex=True, na=False).sum())
+    col_suffix = int(display_names.str.contains(r" - COL$", case=False, regex=True, na=False).sum())
+    return {
+        "total": len(orders_df),
+        "deliveries": deliveries,
+        "collections": collections,
+        "del_suffix": del_suffix,
+        "col_suffix": col_suffix,
+    }
+
+
+def validate_expanded_orders_for_dispatch(orders_df: pd.DataFrame) -> tuple[bool, str]:
+    summary = summarize_expanded_orders(orders_df)
+    if summary["total"] == 0:
+        return False, "No stops to dispatch."
+    if summary["deliveries"] == 0:
+        return False, "No delivery stops found in expanded route."
+    if summary["collections"] == 0:
+        return False, "No collection stops found. Each outlet should have a delivery and a collection stop."
+    if summary["deliveries"] != summary["collections"]:
+        return (
+            False,
+            f"Delivery/collection mismatch: {summary['deliveries']} deliveries vs "
+            f"{summary['collections']} collections.",
+        )
+    if summary["del_suffix"] != summary["deliveries"] or summary["col_suffix"] != summary["collections"]:
+        return False, "Stop names are missing - DEL or - COL suffixes."
+    return (
+        True,
+        f"{summary['deliveries']} deliveries + {summary['collections']} collections "
+        f"({summary['total']} stops).",
+    )
+
+
+def validate_created_route_orders(created_orders: list[dict], expected_count: int) -> tuple[bool, str]:
+    if len(created_orders) < expected_count:
+        return (
+            False,
+            f"Wialon created {len(created_orders)} orders but {expected_count} were sent. "
+            "The route is incomplete; delete it in Logistics and dispatch again.",
+        )
+
+    # Wialon route_update responses often omit - DEL / - COL suffixes in order names even
+    # when Logistics stores them correctly (visible in driver reports and the Logistics UI).
+    return True, f"Verified {len(created_orders)} route orders created in Logistics."
+
+
 def compute_stop_schedule(orders_df: pd.DataFrame, wh_lat: float, wh_lon: float, tf: int) -> list[dict]:
     schedule = []
     planned_visit_time = int(tf)
@@ -1131,7 +1193,7 @@ def send_orders_and_create_route(
         warehouse = WAREHOUSES[warehouse_choice]
         wh_lat, wh_lon = warehouse["lat"], warehouse["lon"]
         current_time = int(time.time())
-        route_id = int(time.time())
+        route_id = allocate_route_id()
         sequence_index = 0
         planned_visit_time = int(tf)
         route_orders = []
@@ -1350,19 +1412,24 @@ def send_orders_and_create_route(
         create_ok = False
         if isinstance(route_result, list):
             first = route_result[0] if route_result else {}
-            create_ok = isinstance(first, dict) and (
-                first.get("error", 0) == 0 or isinstance(first.get("orders"), list)
-            )
+            create_ok = isinstance(first, dict) and first.get("error", 0) == 0
             if not create_ok:
                 return {"error": first.get("error", 1) if isinstance(first, dict) else 1, "message": format_wialon_error(first)}
         elif isinstance(route_result, dict):
-            create_ok = route_result.get("error", 0) == 0 or isinstance(route_result.get("orders"), list)
+            create_ok = route_result.get("error", 0) == 0
             if not create_ok:
                 return {"error": route_result.get("error", 1), "message": format_wialon_error(route_result)}
         else:
             return {"error": 1, "message": format_wialon_error(route_result)}
 
         created_orders = extract_route_orders(route_result)
+        verify_ok, verify_message = validate_created_route_orders(created_orders, len(route_orders))
+        if not verify_ok:
+            return {
+                "error": 1,
+                "message": verify_message,
+                "planning_url": f"https://apps.wialon.com/logistics/?lang=en&sid={session_id}#/distrib/step3",
+            }
         assign_ok, assign_message = assign_route_orders_to_unit(
             session_id,
             resource_id,
@@ -1378,7 +1445,7 @@ def send_orders_and_create_route(
             }
         return {
             "error": 0,
-            "message": f"Route created and vehicle assigned. {assign_message}",
+            "message": f"Route created and vehicle assigned. {assign_message} {verify_message}",
             "planning_url": planning_url,
         }
     except Exception as exc:
@@ -1514,9 +1581,23 @@ def run_fmc_dispatch():
         ]
         st.dataframe(preview_df[[col for col in preview_columns if col in preview_df.columns]], use_container_width=True)
 
+    dispatch_ready, dispatch_summary = validate_expanded_orders_for_dispatch(expanded_orders)
+    if dispatch_ready:
+        st.success(f"Dispatch check passed: {dispatch_summary}")
+    else:
+        st.error(f"Dispatch check failed: {dispatch_summary}")
+
     render_section_header("Logistics Dispatch", "Choose a vehicle and send the selected route to Logistics.")
     if not fleet_df.empty:
-        selected_vehicle_name = st.selectbox("Vehicle", fleet_df["asset_name"].tolist())
+        vehicle_options = fleet_df["asset_name"].tolist()
+        default_vehicle = DEFAULT_ROUTE_VEHICLE_MAP.get(selected_route_name)
+        default_index = vehicle_options.index(default_vehicle) if default_vehicle in vehicle_options else 0
+        selected_vehicle_name = st.selectbox(
+            "Vehicle",
+            vehicle_options,
+            index=default_index,
+            key=f"vehicle_select_{selected_route_name}",
+        )
         selected_asset = fleet_df[fleet_df["asset_name"] == selected_vehicle_name].iloc[0]
         vehicle_name = str(selected_asset["asset_name"])
         unit_id = str(selected_asset["itemid"])
@@ -1535,6 +1616,18 @@ def run_fmc_dispatch():
         if not vehicle_name or not unit_id:
             st.error("Vehicle name and unit ID are required.")
             return
+
+        dispatch_ready, dispatch_summary = validate_expanded_orders_for_dispatch(expanded_orders)
+        if not dispatch_ready:
+            st.error(f"Cannot dispatch: {dispatch_summary}")
+            return
+
+        expected_vehicle = DEFAULT_ROUTE_VEHICLE_MAP.get(selected_route_name)
+        if expected_vehicle and vehicle_name != expected_vehicle:
+            st.warning(
+                f"`{selected_route_name}` is usually assigned to `{expected_vehicle}`, "
+                f"but `{vehicle_name}` is selected."
+            )
 
         tz = pytz.timezone("Africa/Nairobi")
         start_time = tz.localize(datetime.combine(start_date, start_clock))
@@ -1559,9 +1652,13 @@ def run_fmc_dispatch():
             )
 
         if result.get("error") == 0:
-            st.success("Route dispatched successfully.")
+            st.success(result.get("message", "Route dispatched successfully."))
+            if result.get("planning_url"):
+                st.markdown(f"[Open route in Logistics]({result['planning_url']})")
         else:
             st.error(f"Dispatch failed: {result.get('message', 'Unknown error')}")
+            if result.get("planning_url"):
+                st.markdown(f"[Open Logistics to review or delete the partial route]({result['planning_url']})")
 
 
 if __name__ == "__main__":
