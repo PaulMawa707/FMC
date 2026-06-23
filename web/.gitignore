@@ -1,0 +1,20 @@
+# Dependencies
+/node_modules
+/.next
+/out
+
+# Env
+.env
+.env.local
+.env*.local
+
+# Debug
+npm-debug.log*
+
+# Types
+next-env.d.ts
+
+# Vercel
+.vercel
+
+# Keep data xlsx in repo for now (or move to Vercel Blob later)

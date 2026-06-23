@@ -1,0 +1,151 @@
+.page {
+  min-height: 100vh;
+  background: #f1f5f9;
+  color: #0f172a;
+  padding: 1.5rem;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.eyebrow {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75rem;
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.title {
+  margin: 0.25rem 0 0;
+  font-size: 2rem;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.panelTitle {
+  margin: 0 0 1rem;
+  font-size: 1.1rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 1rem;
+}
+
+.tableWrap {
+  overflow: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.th,
+.td {
+  text-align: left;
+  padding: 0.65rem 0.5rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.th {
+  font-weight: 700;
+}
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-bottom: 0.85rem;
+}
+
+.input,
+.select {
+  font: inherit;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 0.7rem 0.85rem;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.primary,
+.secondary {
+  border: 0;
+  border-radius: 10px;
+  padding: 0.8rem 1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primary {
+  background: #0f766e;
+  color: #fff;
+}
+
+.secondary {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.ok {
+  color: #047857;
+  background: #ecfdf5;
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+
+.err {
+  color: #b91c1c;
+  background: #fef2f2;
+  border-radius: 10px;
+  padding: 0.75rem;
+}
+
+.bannerOk,
+.bannerErr {
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  margin-top: 1rem;
+}
+
+.bannerOk {
+  background: #ecfdf5;
+  border: 1px solid #6ee7b7;
+}
+
+.bannerErr {
+  background: #fef2f2;
+  border: 1px solid #fca5a5;
+}
+
+.link {
+  color: #0f766e;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -1,4 +1,13 @@
 .streamlit/secrets.toml
 __pycache__/
 .env
+.env.local
 *.pyc
+.venv/
+.vercel/
+
+# Next.js optional rebuild (web/)
+web/node_modules/
+web/.next/
+web/.vercel/
+web/.env.local
