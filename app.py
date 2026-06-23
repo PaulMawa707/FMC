@@ -3,6 +3,7 @@ from datetime import datetime
 from functools import wraps
 from hmac import compare_digest
 from pathlib import Path
+from urllib.parse import unquote
 
 import numpy as np
 import pytz
@@ -67,6 +68,11 @@ def parse_datetime_local(value: str) -> datetime:
     if parsed.tzinfo is None:
         return tz.localize(parsed)
     return parsed.astimezone(tz)
+
+
+def normalize_route_param(route_name: str) -> str:
+    """Decode URL-encoded route names (Vercel may pass %20 literally in path segments)."""
+    return unquote(route_name or "").strip()
 
 
 @app.route("/")
@@ -154,6 +160,7 @@ def api_routes():
 @app.route("/api/routes/<path:route_name>/preview")
 @login_required
 def api_route_preview(route_name):
+    route_name = normalize_route_param(route_name)
     workbook_source = dispatch.resolve_workbook_source(None)
     if workbook_source is None:
         return jsonify({"ok": False, "error": f"Default workbook not found: {dispatch.DEFAULT_WORKBOOK}"}), 404
@@ -248,7 +255,7 @@ def api_dispatch():
         ), 500
 
     payload = request.get_json(silent=True) or {}
-    route_name = str(payload.get("route_name", "")).strip()
+    route_name = normalize_route_param(str(payload.get("route_name", "")))
     vehicle_name = str(payload.get("vehicle_name", "")).strip()
     unit_id = str(payload.get("unit_id", "")).strip()
     route_from = str(payload.get("route_from", "")).strip()
