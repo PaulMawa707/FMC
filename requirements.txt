@@ -1,5 +1,7 @@
-streamlit
+flask
+python-dotenv
 pandas
+numpy
 requests
 pytz
 openpyxl

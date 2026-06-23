@@ -1,0 +1,62 @@
+<div class="section-card">
+  <form id="weekly-load-form">
+    <div class="form-grid">
+      <div class="form-field">
+        <label>Dispatch From</label>
+        <input type="datetime-local" name="dispatch_from" class="dispatch-from" required />
+      </div>
+      <div class="form-field">
+        <label>Dispatch End</label>
+        <input type="datetime-local" name="dispatch_end" class="dispatch-end" required />
+      </div>
+      <div class="form-field">
+        <label>Warehouse</label>
+        <select name="warehouse">
+          {% for wh in warehouses %}
+            <option value="{{ wh }}">{{ wh }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <button type="submit" class="btn-primary">Load Routes</button>
+    <div class="result-alert alert hidden"></div>
+  </form>
+</div>
+
+<div id="weekly-dispatch-panel" class="hidden">
+  <div class="section-card">
+    <div class="section-title">Routes</div>
+    <div class="form-grid">
+      <div class="form-field">
+        <label>Select day</label>
+        <select id="weekly-day-select"></select>
+      </div>
+      <div class="form-field">
+        <label>Select route</label>
+        <select id="weekly-route-select"></select>
+      </div>
+      <div class="form-field">
+        <label>Select asset</label>
+        <select id="weekly-asset-select"></select>
+      </div>
+    </div>
+    <table id="weekly-routes-table" class="data-table">
+      <thead>
+        <tr><th>Route</th><th>Stops</th><th>Tonnage</th><th>Amount</th><th>Source</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="section-card">
+    <div class="section-title">Selected route stops</div>
+    <table id="weekly-stops-table" class="data-table">
+      <thead>
+        <tr><th>Priority</th><th>Customer</th><th>Location</th><th>Tonnage</th><th>Amount</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <button type="button" id="weekly-dispatch-btn" class="btn-primary">Dispatch Selected Route</button>
+    <div id="weekly-dispatch-alert" class="alert hidden"></div>
+  </div>
+</div>

@@ -1,0 +1,32 @@
+<div class="section-card">
+  <form id="optimized-form" enctype="multipart/form-data">
+    <div class="form-grid">
+      <div class="form-field">
+        <label>Orders Excel file(s)</label>
+        <input type="file" name="orders" accept=".xls,.xlsx" multiple required />
+      </div>
+      <div class="form-field">
+        <label>Assets Excel</label>
+        <input type="file" name="assets" accept=".xls,.xlsx" required />
+      </div>
+      <div class="form-field">
+        <label>Route From</label>
+        <input type="datetime-local" name="route_from" class="route-from" required />
+      </div>
+      <div class="form-field">
+        <label>Route End</label>
+        <input type="datetime-local" name="route_end" class="route-end" required />
+      </div>
+      <div class="form-field">
+        <label>Warehouse</label>
+        <select name="warehouse">
+          {% for wh in warehouses %}
+            <option value="{{ wh }}">{{ wh }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <button type="submit" class="btn-primary">Upload and Dispatch</button>
+    <div class="result-alert alert hidden"></div>
+  </form>
+</div>

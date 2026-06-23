@@ -14,7 +14,14 @@ from textwrap import dedent
 import pandas as pd
 import pytz
 import requests
-import streamlit as st
+from dotenv import load_dotenv
+
+try:
+    import streamlit as st
+except ImportError:
+    st = None
+
+load_dotenv()
 
 
 WAREHOUSES = {
@@ -47,8 +54,8 @@ ROUTE_FLAG_STRICT_SEQUENCE = 1
 REMOTE_API_URL = "https://hst-api.wialon.com/wialon/ajax.html"
 LOGISTICS_API_URL = "https://logistics.wialon.com/api/route"
 LOGISTICS_ROUTES_URL = "https://logistics.wialon.com/api/routes"
-LOGISTICS_TOKEN = "47b7b37d939f2d44f52ddf671a0ec4f0E6A9DA697BD24244C9E323E8396567A0B4B74E8D"
-LOGISTICS_RESOURCE_ID = 28277390
+LOGISTICS_TOKEN = os.getenv("LOGISTICS_TOKEN", "").strip()
+LOGISTICS_RESOURCE_ID = int(os.getenv("LOGISTICS_RESOURCE_ID", "0") or 0)
 FARMERS_CHOICE_WEBSITE_URL = "https://farmerschoice.co.ke/"
 FARMERS_CHOICE_LOGO_URL = "https://farmerschoice.co.ke/wp-content/uploads/2025/05/farmers-choice-logo.png"
 LOCAL_BRAND_LOGO_FILE = "farmers_choice_logo.png"
@@ -1662,4 +1669,6 @@ def run_fmc_dispatch():
 
 
 if __name__ == "__main__":
+    if st is None:
+        raise SystemExit("Streamlit is required to run the legacy UI. Install streamlit or use: python app.py")
     run_fmc_dispatch()
