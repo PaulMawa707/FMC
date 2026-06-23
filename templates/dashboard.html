@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/farmers_choice_logo.png') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body data-active-tab="{{ active_tab }}">
+
+<nav class="topbar">
+  <div class="topbar-left">
+    {% if logo_exists %}
+    <div class="topbar-logo">
+      <img src="{{ url_for('static', filename='img/farmers_choice_logo.png') }}" alt="Farmer's Choice Logo">
+    </div>
+    <div class="topbar-divider"></div>
+    {% endif %}
+    <div>
+      <div class="topbar-wordmark">Farmer's Choice <span>Dispatch</span></div>
+      <div class="topbar-subtitle">Logistics Routing · Kenya</div>
+    </div>
+  </div>
+  <div class="topbar-right">
+    {% if username %}
+    <div class="topbar-user">Signed in as {{ username }}</div>
+    {% endif %}
+    <div class="topbar-clock" id="live-clock"><span>EAT</span> <span id="clock-time">--:--:--</span></div>
+    <div class="live-pill"><div class="live-dot"></div>Live</div>
+    <a href="{{ url_for('logout') }}" class="btn-logout">Sign Out</a>
+  </div>
+</nav>
+
+<nav class="mobile-tab-bar" aria-label="Main sections">
+  <button type="button" class="mobile-tab-item{% if active_tab == 'dispatch' %} active{% endif %}" data-tab="dispatch" onclick="showTab('dispatch')">
+    <span class="mt-ico">🚚</span><span class="mt-lbl">Dispatch</span>
+  </button>
+  <button type="button" class="mobile-tab-item{% if active_tab == 'fleet' %} active{% endif %}" data-tab="fleet" onclick="showTab('fleet')">
+    <span class="mt-ico">🛻</span><span class="mt-lbl">Fleet</span>
+  </button>
+</nav>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-nav">
+      <a href="#" class="nav-item{% if active_tab == 'dispatch' %} active{% endif %}" data-tab="dispatch" onclick="showTab('dispatch'); return false;">
+        <span class="nav-icon">🚚</span>
+        <span class="nav-label">Route Dispatch</span>
+      </a>
+      <a href="#" class="nav-item{% if active_tab == 'fleet' %} active{% endif %}" data-tab="fleet" onclick="showTab('fleet'); return false;">
+        <span class="nav-icon">🛻</span>
+        <span class="nav-label">Fleet Assets</span>
+      </a>
+    </div>
+    <div class="sidebar-footer">
+      <a href="{{ controltech_url }}" target="_blank" rel="noopener noreferrer" class="sidebar-footer-link" title="Powered by ControlTech">
+        {% if ct_logo_exists %}
+          <img src="{{ url_for('static', filename=ct_logo_path) }}" alt="ControlTech" class="sidebar-footer-logo">
+        {% endif %}
+        <span class="sidebar-footer-text">Powered by <strong>ControlTech</strong></span>
+      </a>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="tab-dispatch" class="tab-panel{% if active_tab == 'dispatch' %} active{% endif %}">
+      <div class="page-header">
+        <div class="page-title">FMC Route Dispatch <span>(Delivery + Collection)</span></div>
+        <div class="page-subtitle">Load route workbooks, preview stop sequences, match fleet assets, and dispatch to Wialon Logistics.</div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Routes loaded</div>
+          <div class="stat-value" id="stat-routes">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Fleet vehicles</div>
+          <div class="stat-value" id="stat-fleet">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Workbook</div>
+          <div class="stat-value" id="stat-workbook" style="font-size:0.95rem;line-height:1.35;">—</div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-title">Route schedule</div>
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="route-from">Route from</label>
+            <input type="datetime-local" id="route-from" class="route-from" required />
+          </div>
+          <div class="form-field">
+            <label for="route-end">Route end</label>
+            <input type="datetime-local" id="route-end" class="route-end" required />
+          </div>
+          <div class="form-field">
+            <label for="warehouse-select">Warehouse</label>
+            <select id="warehouse-select">
+              {% for wh in warehouses %}
+                <option value="{{ wh }}">{{ wh }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+          <div class="section-title" style="margin:0;">Available routes</div>
+          <button type="button" id="refresh-routes-btn" class="btn-secondary">Refresh</button>
+        </div>
+        <div class="data-table-wrap">
+          <table id="routes-table" class="data-table">
+            <thead>
+              <tr>
+                <th>Route</th><th>Sheet</th><th>Format</th><th>Base Stops</th><th>Expanded Stops</th><th>Amount</th><th>Tonnage</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div id="routes-alert" class="alert info hidden"></div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-title">Dispatch route</div>
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="route-select">Route to dispatch</label>
+            <select id="route-select"></select>
+          </div>
+          <div class="form-field">
+            <label for="vehicle-select">Vehicle</label>
+            <select id="vehicle-select"></select>
+          </div>
+          <div class="form-field" style="display:flex;align-items:flex-end;">
+            <div>
+              <div class="stat-label">Dispatch status</div>
+              <span id="dispatch-badge" class="badge">—</span>
+            </div>
+          </div>
+        </div>
+        <button type="button" id="dispatch-btn" class="btn-primary">Dispatch Selected Route</button>
+        <div id="dispatch-alert" class="alert hidden"></div>
+        <div id="preview-alert" class="alert hidden"></div>
+      </div>
+
+      <div class="split-grid">
+        <div class="section-card">
+          <div class="section-title">Base stops</div>
+          <div class="data-table-wrap">
+            <table id="base-stops-table" class="data-table">
+              <thead>
+                <tr><th>#</th><th>Customer</th><th>Location</th><th>Lat</th><th>Long</th><th>Tonnage</th><th>Amount</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="section-card">
+          <div class="section-title">Logistics stop sequence</div>
+          <div class="data-table-wrap">
+            <table id="expanded-stops-table" class="data-table">
+              <thead>
+                <tr><th>Seq</th><th>Type</th><th>Stop</th><th>Location</th><th>Lat</th><th>Long</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-fleet" class="tab-panel{% if active_tab == 'fleet' %} active{% endif %}">
+      <div class="page-header">
+        <div class="page-title">Fleet Assets <span>(FCL Vehicles)</span></div>
+        <div class="page-subtitle">Vehicles loaded from the local fleet workbook for route assignment in Wialon.</div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-title">Registered vehicles</div>
+        <div class="data-table-wrap">
+          <table id="fleet-table" class="data-table">
+            <thead>
+              <tr><th>Asset name</th><th>Unit ID</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div id="fleet-alert" class="alert info hidden"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>

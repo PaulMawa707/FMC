@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Farmer's Choice · Sign in</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/farmers_choice_logo.png') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] },
+          colors: {
+            brand: {
+              50: '#e8f3ef',
+              100: '#d1e7df',
+              200: '#a3cfbf',
+              300: '#75b79f',
+              400: '#479f7f',
+              500: '#1b5e4b',
+              600: '#164a3c',
+              700: '#11372d',
+              800: '#0b251e',
+              900: '#06120f',
+            },
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    html, body { font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
+    .login-root { min-height: 100dvh; max-height: 100dvh; overflow: hidden; }
+    @media (max-width: 1023px) {
+      .login-root { max-height: none; overflow-y: auto; }
+    }
+    @keyframes hero-float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
+    .hero-float { animation: hero-float 4.5s ease-in-out infinite; }
+    @keyframes card-rise {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .card-rise { animation: card-rise 0.5s cubic-bezier(.2,.8,.2,1) both; }
+    @keyframes spin-soft { to { transform: rotate(360deg); } }
+    .spin-soft { animation: spin-soft 0.9s linear infinite; }
+    .hero-headline {
+      color: #fff;
+      font-weight: 800;
+      text-shadow: 0 2px 16px rgba(0,0,0,0.55);
+    }
+    .hero-accent { color: #a3cfbf; font-weight: 800; }
+    .hero-body { color: rgba(255,255,255,0.92); text-shadow: 0 1px 3px rgba(0,0,0,0.6); }
+  </style>
+</head>
+<body class="bg-emerald-50 text-stone-900 antialiased">
+  <div class="login-root grid min-h-0 grid-cols-1 lg:grid-cols-[1.25fr_minmax(300px,460px)] lg:h-[100dvh]">
+
+    <aside class="relative hidden min-h-0 overflow-hidden lg:block">
+      {% if hero_exists %}
+        <img src="{{ url_for('static', filename='img/farmers_choice_login_hero.jpg') }}"
+             alt="Farmer's Choice logistics operations"
+             class="absolute inset-0 h-full w-full object-cover" />
+      {% else %}
+        <div class="absolute inset-0 bg-brand-700"></div>
+      {% endif %}
+      <div class="absolute inset-0"
+           style="background: linear-gradient(135deg, rgba(17,55,45,0.88) 0%, rgba(27,94,75,0.62) 45%, rgba(0,0,0,0.55) 100%);"></div>
+      <div class="relative z-10 flex h-full min-h-0 flex-col justify-end p-8 pb-10 text-white">
+        <div class="max-w-xl space-y-3">
+          <span class="inline-flex items-center gap-2 rounded-full border border-white/25 bg-black/20 px-3 py-1 text-xs font-bold uppercase tracking-wider">
+            Route dispatch
+          </span>
+          <h1 class="hero-headline text-3xl leading-snug xl:text-4xl">
+            Plan delivery and collection routes for <span class="hero-accent">Farmer's Choice</span> in Wialon Logistics.
+          </h1>
+          <p class="hero-body max-w-lg text-sm leading-relaxed">
+            Load route workbooks, preview stop sequences, match fleet assets, and dispatch optimized FMC routes from one console.
+          </p>
+        </div>
+      </div>
+    </aside>
+
+    <section class="flex min-h-0 flex-col justify-center overflow-y-auto bg-emerald-50 px-4 py-6 lg:max-h-[100dvh]">
+      <div class="mx-auto w-full max-w-[400px]">
+        <div class="mb-4 flex justify-center">
+          <div class="hero-float flex w-fit items-center gap-3 rounded-2xl border border-brand-200 bg-white px-4 py-2 shadow-lg">
+            {% if logo_exists %}
+              <img src="{{ url_for('static', filename='img/farmers_choice_logo.png') }}" alt="Farmer's Choice" class="h-10 w-auto object-contain" />
+            {% endif %}
+            <div>
+              <p class="text-lg font-extrabold leading-tight text-brand-800">Farmer's Choice</p>
+              <p class="text-[11px] font-bold uppercase tracking-[0.18em] text-stone-600">Route Dispatch</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="card-rise rounded-2xl border border-stone-200 bg-white p-6 shadow-xl">
+          <div class="mb-5">
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider text-brand-800">
+              Secure sign-in
+            </span>
+            <h2 class="mt-2 text-2xl font-extrabold text-stone-900">Welcome back</h2>
+            <p class="mt-1 text-sm font-medium text-stone-600">Sign in to access the FMC Logistics dispatch console.</p>
+          </div>
+
+          <form id="login-form" method="post" action="{{ url_for('login') }}" class="space-y-4">
+            <label class="block text-sm font-semibold text-stone-800">
+              Username
+              <input type="text" name="username" required autocomplete="username"
+                     class="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm shadow-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200" />
+            </label>
+            <label class="block text-sm font-semibold text-stone-800">
+              Password
+              <input type="password" name="password" required autocomplete="current-password"
+                     class="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm shadow-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200" />
+            </label>
+
+            {% if error %}
+              <p class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-800" role="alert">{{ error }}</p>
+            {% endif %}
+
+            <button id="submit-btn" type="submit"
+                    class="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-600 py-2.5 text-sm font-bold text-white shadow-md transition hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-300 disabled:opacity-70">
+              <svg id="submit-spinner" class="spin-soft hidden h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
+              <span id="submit-label">Sign in</span>
+            </button>
+          </form>
+        </div>
+
+        <a href="{{ controltech_url }}" target="_blank" rel="noopener noreferrer"
+           class="group mx-auto mt-4 flex w-fit items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-1.5 text-xs font-semibold text-stone-700 shadow-sm transition hover:border-brand-300 hover:text-brand-800">
+          {% if ct_logo_exists %}
+            <img src="{{ url_for('static', filename=ct_logo_path) }}" alt="ControlTech" class="h-6 w-auto rounded" />
+          {% endif %}
+          <span>Powered by <span class="font-bold text-brand-700 group-hover:underline">ControlTech</span></span>
+        </a>
+
+        <p class="mt-3 text-center text-[11px] font-medium text-stone-500">
+          &copy; <span id="copyright-year"></span> Farmer's Choice Ltd
+        </p>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    document.getElementById('copyright-year').textContent = new Date().getFullYear();
+    document.getElementById('login-form').addEventListener('submit', function () {
+      const btn = document.getElementById('submit-btn');
+      const lbl = document.getElementById('submit-label');
+      const spin = document.getElementById('submit-spinner');
+      btn.disabled = true;
+      lbl.textContent = 'Signing in…';
+      spin.classList.remove('hidden');
+    });
+  </script>
+</body>
+</html>
